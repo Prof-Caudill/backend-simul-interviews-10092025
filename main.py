@@ -1,15 +1,16 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from openai import OpenAI
 
-# Initialize FastAPI app
 app = FastAPI()
 
-# Initialize OpenAI client with environment variable
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Initialize OpenAI client
+api_key = os.getenv("OPENAI_API_KEY")
+if not api_key:
+    raise RuntimeError("Missing OPENAI_API_KEY environment variable")
+client = OpenAI(api_key=api_key)
 
-# Define a request model for the /chat endpoint
 class ChatRequest(BaseModel):
     message: str
 
@@ -19,13 +20,24 @@ def home():
 
 @app.post("/chat")
 def chat_endpoint(request: ChatRequest):
-    """Handles chat messages from the frontend"""
-    user_input = request.message
+    try:
+        user_input = request.message
 
-    response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": user_input}]
-    )
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": user_input}]
+        )
 
-    answer = response.choices[0].message.content
-    return {"response": answer}
+        # Safely extract AI response
+        answer = (
+            response.choices[0].message.content
+            if hasattr(response.choices[0].message, "content")
+            else response.choices[0].message["content"]
+        )
+
+        return {"response": answer}
+
+    except Exception as e:
+        # This helps you debug errors in Render logs
+        print(f"Error in /chat: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
