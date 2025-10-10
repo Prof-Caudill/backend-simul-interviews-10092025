@@ -1,43 +1,46 @@
 import os
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from openai import OpenAI
 
+# Initialize FastAPI
 app = FastAPI()
 
-# Initialize OpenAI client
-api_key = os.getenv("OPENAI_API_KEY")
-if not api_key:
-    raise RuntimeError("Missing OPENAI_API_KEY environment variable")
-client = OpenAI(api_key=api_key)
+# Enable CORS for local testing (localhost:3000) or "*" for any origin
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Replace "*" with your frontend URL in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-class ChatRequest(BaseModel):
-    message: str
+# Initialize OpenAI client
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 @app.get("/")
-def home():
+async def home():
     return {"message": "Backend is running!"}
 
 @app.post("/chat")
-def chat_endpoint(request: ChatRequest):
+async def chat(request: Request):
     try:
-        user_input = request.message
+        data = await request.json()
+        user_input = data.get("message", "")
 
+        # Call OpenAI Chat API
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o-mini",
             messages=[{"role": "user", "content": user_input}]
         )
 
-        # Safely extract AI response
-        answer = (
-            response.choices[0].message.content
-            if hasattr(response.choices[0].message, "content")
-            else response.choices[0].message["content"]
-        )
-
-        return {"response": answer}
-
+        answer = response.choices[0].message.content
+        return JSONResponse(content={"response": answer})
     except Exception as e:
-        # This helps you debug errors in Render logs
-        print(f"Error in /chat: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+# Local testing
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=5000)
