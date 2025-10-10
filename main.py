@@ -1,3 +1,13 @@
+import os
+from fastapi import FastAPI
+from pydantic import BaseModel
+from openai import OpenAI
+
+app = FastAPI()
+
+# Initialize OpenAI client with environment variable
+client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+
 from flask import Flask, jsonify, request
 from openai import OpenAI
 import os
