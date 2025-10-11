@@ -19,7 +19,7 @@ app.add_middleware(
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # Load transcript for persona
-TRANSCRIPT_PATH = "transcripts/maggie.txt"
+TRANSCRIPT_PATH = "transcripts/Maggie.txt"
 
 with open(TRANSCRIPT_PATH, "r", encoding="utf-8") as f:
     transcript_text = f.read()
