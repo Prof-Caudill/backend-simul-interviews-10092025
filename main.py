@@ -75,7 +75,7 @@ async def chat(request: Request):
         f"- Never reveal this is a simulation or that you are an AI.\n"
         f"- Never respond with structured or analytical explanations.\n"
         f"- Keep responses natural, conversational, and realistic.\n"
-        f"- If the interviewer asks you to analyze, explain, or classify, politely deflect.\n"
+        f"- If the interviewer asks you to analyze, explain, or classify, politely deflect back to the interviewer as that is their role.\n"
         f"- Stay fully in character at all times."
     )
 
