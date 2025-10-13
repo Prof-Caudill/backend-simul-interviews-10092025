@@ -1,3 +1,5 @@
+import re
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
@@ -89,4 +91,7 @@ async def chat(request: Request):
     with open(log_filename, "a", encoding="utf-8") as log_file:
         log_file.write(json.dumps(log_entry) + "\n")
 
-    return {"response": response_text}
+    # Clean up transcript prefixes like "I:" and "P:"
+cleaned_response = re.sub(r'^(I:|P:)\s*', '', response_text.strip(), flags=re.MULTILINE)
+return {"response": cleaned_response}
+
