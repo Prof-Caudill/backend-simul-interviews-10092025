@@ -2,12 +2,12 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
 import os
-import re
+from datetime import datetime
 
-# Initialize FastAPI app
+# Initialize FastAPI
 app = FastAPI()
 
-# Allow requests from all origins (OK for dev — restrict in prod if needed)
+# Allow frontend connections (adjust "*" in production)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  
@@ -19,10 +19,14 @@ app.add_middleware(
 # Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# Directory for transcript files
+# Directories
 TRANSCRIPTS_DIR = "transcripts"
+LOGS_DIR = "logs"
 
-# Load persona transcripts
+# Ensure logs directory exists
+os.makedirs(LOGS_DIR, exist_ok=True)
+
+# Load available persona transcripts
 personas = {}
 if os.path.exists(TRANSCRIPTS_DIR):
     for filename in os.listdir(TRANSCRIPTS_DIR):
@@ -33,44 +37,57 @@ if os.path.exists(TRANSCRIPTS_DIR):
 
 @app.get("/")
 def home():
-    """Root endpoint for status check."""
     return {"message": "Backend is running!", "available_personas": list(personas.keys())}
 
 @app.post("/chat")
 async def chat(request: Request):
-    """Chat endpoint that returns persona-based responses."""
     data = await request.json()
     user_input = data.get("message", "")
     persona = data.get("persona", "").lower()
+    student_name = data.get("student_name", "").strip()  # NEW: capture student name
 
-    # Verify persona exists
+    if not student_name:
+        return {"error": "Missing student name."}
+
     if persona not in personas:
         return {"error": f"Persona '{persona}' not found. Available: {list(personas.keys())}"}
 
+    # Load transcript context
     transcript_text = personas[persona]
 
-    # Build system prompt
+    # Build trauma-informed and persona prompt
     prompt = (
         f"You are roleplaying as '{persona.title()}', a probation client. "
-        f"Your tone, attitude, and language should stay consistent with the following real interview transcript:\n\n"
+        f"Your tone, emotions, and expressions should match the style of the following real transcript:\n\n"
         f"{transcript_text}\n\n"
-        f"Continue as {persona.title()} and respond naturally to the interviewer. "
-        f"Do not include 'I:' or 'P:' labels in your responses. "
-        f"Do not reveal you are an AI simulation.\n\n"
-        f"The interviewer just asked:\n{user_input}"
+        f"Stay consistent with the transcript’s emotional realism — language, hesitations, tone — but be trauma-informed in your own experience. "
+        f"If the interviewer uses empathetic, supportive, and trauma-informed language, respond with more openness and self-reflection. "
+        f"If the interviewer is harsh or judgmental, respond with defensiveness or brevity. "
+        f"Do NOT include speaker tags like 'P:' or 'I:' in your response.\n\n"
+        f"The interviewer just said:\n{user_input}"
     )
 
     try:
+        # Generate AI response
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
         )
-        raw_response = response.choices[0].message.content
+        answer = response.choices[0].message.content.strip()
 
-        # ✅ Clean out speaker labels (I: / P:)
-        cleaned_response = re.sub(r'^(I:|P:)\s*', '', raw_response.strip(), flags=re.MULTILINE)
+        # Clean up any speaker tags just in case
+        answer = answer.replace("P:", "").replace("I:", "").strip()
 
-        return {"response": cleaned_response}
+        # Log student conversation
+        log_path = os.path.join(LOGS_DIR, f"{student_name.replace(' ', '_')}_log.txt")
+        with open(log_path, "a", encoding="utf-8") as log_file:
+            log_file.write(f"\n--- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---\n")
+            log_file.write(f"Persona: {persona.title()}\n")
+            log_file.write(f"Student: {student_name}\n")
+            log_file.write(f"Question: {user_input}\n")
+            log_file.write(f"Response: {answer}\n")
+
+        return {"response": answer}
 
     except Exception as e:
         return {"error": str(e)}
