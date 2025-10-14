@@ -1,32 +1,34 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from openai import OpenAI
 import os
-from datetime import datetime
+import csv
+import datetime
 
-# Initialize FastAPI
+# === FastAPI setup ===
 app = FastAPI()
 
-# Allow frontend connections (adjust "*" in production)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  
+    allow_origins=["*"],  # Change to your frontend URL in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Initialize OpenAI client
+# === Initialize OpenAI ===
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# Directories
-TRANSCRIPTS_DIR = "transcripts"
-LOGS_DIR = "logs"
-
-# Ensure logs directory exists
+# === Logging setup ===
+LOGS_DIR = "student_logs"
 os.makedirs(LOGS_DIR, exist_ok=True)
 
-# Load available persona transcripts
+# === Instructor access password ===
+INSTRUCTOR_PASSWORD = os.getenv("INSTRUCTOR_PASSWORD", "teachsecure123")
+
+# === Load persona transcripts ===
+TRANSCRIPTS_DIR = "transcripts"
 personas = {}
 if os.path.exists(TRANSCRIPTS_DIR):
     for filename in os.listdir(TRANSCRIPTS_DIR):
@@ -35,59 +37,78 @@ if os.path.exists(TRANSCRIPTS_DIR):
             with open(os.path.join(TRANSCRIPTS_DIR, filename), "r", encoding="utf-8") as f:
                 personas[persona_name] = f.read()
 
+# === Routes ===
 @app.get("/")
 def home():
-    return {"message": "Backend is running!", "available_personas": list(personas.keys())}
+    """Check backend status & list available personas."""
+    return {"message": "Backend running!", "available_personas": list(personas.keys())}
+
 
 @app.post("/chat")
 async def chat(request: Request):
+    """Handle chat messages between student and persona."""
     data = await request.json()
     user_input = data.get("message", "")
     persona = data.get("persona", "").lower()
-    student_name = data.get("student_name", "").strip()  # NEW: capture student name
+    student_name = data.get("student_name", "anonymous")
 
-    if not student_name:
-        return {"error": "Missing student name."}
-
+    if not user_input or not persona:
+        raise HTTPException(status_code=400, detail="Missing message or persona.")
     if persona not in personas:
-        return {"error": f"Persona '{persona}' not found. Available: {list(personas.keys())}"}
+        raise HTTPException(status_code=404, detail=f"Persona '{persona}' not found.")
 
-    # Load transcript context
     transcript_text = personas[persona]
 
-    # Build trauma-informed and persona prompt
-    prompt = (
-        f"You are roleplaying as '{persona.title()}', a probation client. "
-        f"Your tone, emotions, and expressions should match the style of the following real transcript:\n\n"
+    # --- Improved realism prompt ---
+    system_prompt = (
+        f"You are roleplaying as '{persona.title()}', a real probation client in an interview. "
+        f"Use natural speech patterns: pauses, hesitations, slang, and emotional realism. "
+        f"You may sound defensive, uncertain, or reflective. "
+        f"Avoid sounding robotic or overly formal. "
+        f"Base your tone, personality, and content on this real interview transcript:\n\n"
         f"{transcript_text}\n\n"
-        f"Stay consistent with the transcript’s emotional realism — language, hesitations, tone — but be trauma-informed in your own experience. "
-        f"If the interviewer uses empathetic, supportive, and trauma-informed language, respond with more openness and self-reflection. "
-        f"If the interviewer is harsh or judgmental, respond with defensiveness or brevity. "
-        f"Do NOT include speaker tags like 'P:' or 'I:' in your response.\n\n"
-        f"The interviewer just said:\n{user_input}"
+        f"Continue the interview as {persona.title()} — stay fully in character and never reveal you are AI.\n"
+        f"The interviewer just asked:\n{user_input}"
     )
 
     try:
-        # Generate AI response
+        # --- Generate AI response ---
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{"role": "user", "content": system_prompt}],
         )
-        answer = response.choices[0].message.content.strip()
+        raw_answer = response.choices[0].message.content.strip()
 
-        # Clean up any speaker tags just in case
-        answer = answer.replace("P:", "").replace("I:", "").strip()
+        # --- Clean up AI response ---
+        cleaned_response = raw_answer.replace("P:", "").replace("I:", "").strip()
 
-        # Log student conversation
-        log_path = os.path.join(LOGS_DIR, f"{student_name.replace(' ', '_')}_log.txt")
-        with open(log_path, "a", encoding="utf-8") as log_file:
-            log_file.write(f"\n--- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---\n")
-            log_file.write(f"Persona: {persona.title()}\n")
-            log_file.write(f"Student: {student_name}\n")
-            log_file.write(f"Question: {user_input}\n")
-            log_file.write(f"Response: {answer}\n")
+        # --- Log interaction by student name ---
+        log_file = os.path.join(LOGS_DIR, f"{student_name.replace(' ', '_')}_log.csv")
+        with open(log_file, mode="a", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            if f.tell() == 0:
+                writer.writerow(["timestamp", "student_name", "persona", "student_message", "ai_response"])
+            writer.writerow([
+                datetime.datetime.now().isoformat(),
+                student_name,
+                persona,
+                user_input,
+                cleaned_response
+            ])
 
-        return {"response": answer}
+        return {"response": cleaned_response}
 
     except Exception as e:
-        return {"error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/instructor/logs")
+async def get_logs(password: str):
+    """Instructor-only access to download logs as a ZIP file."""
+    if password != INSTRUCTOR_PASSWORD:
+        raise HTTPException(status_code=403, detail="Invalid password.")
+
+    import shutil
+    zip_path = "all_student_logs.zip"
+    shutil.make_archive("all_student_logs", "zip", LOGS_DIR)
+    return FileResponse(zip_path, filename="student_logs.zip", media_type="application/zip")
