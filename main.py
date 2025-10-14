@@ -63,7 +63,8 @@ async def chat(request: Request):
     system_prompt = (
         f"You are roleplaying as '{persona.title()}', a real probation client in an interview. "
         f"Use natural speech patterns: pauses, hesitations, slang, and emotional realism. "
-        f"You may sound defensive, uncertain, or reflective. "
+        f"You may sound defensive, uncertain, or mildly reflective. "
+        f"Reserve or guarded responses are good, especially for earlier questions on sensitive topics. "
         f"Avoid sounding robotic or overly formal. "
         f"Base your tone, personality, and content on this real interview transcript:\n\n"
         f"{transcript_text}\n\n"
