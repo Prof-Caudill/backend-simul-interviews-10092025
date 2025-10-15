@@ -1,147 +1,137 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from openai import OpenAI
+from pydantic import BaseModel
+import openai
 import os
 import json
 from datetime import datetime
 
-# Initialize FastAPI app
 app = FastAPI()
 
-# Allow frontend access (replace "*" with your frontend URL in production)
+# --- CORS Configuration ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Adjust for production security later
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Initialize OpenAI client
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# --- OpenAI Configuration ---
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# Persona definitions
-PERSONA_PROFILES = {
-    "maggie": {
-        "age": 32,
-        "gender": "F",
-        "offense": "Possession and distribution of a controlled substance, domestic violence",
-        "risk": "Moderate-High",
-        "style": "Anxious, cooperative, easily discouraged",
-        "background": (
-            "Maggie is a 32-year-old woman with a history of drug use and domestic violence. "
-            "She's been in and out of treatment programs and probation. She wants to change but feels anxious and uncertain. "
-            "Her tone is nervous but hopeful. She sometimes rambles, repeats herself, or asks for reassurance."
-        )
-    },
-    "simon": {
-        "age": 47,
-        "gender": "M",
-        "offense": "Cultivation of marijuana, vehicle theft, child support issues, probation violations",
-        "risk": "Moderate",
-        "style": "Humble, cooperative, blue-collar worker, simple",
-        "background": (
-            "Simon is a 47-year-old man who worked manual labor most of his life. "
-            "He's been charged for marijuana cultivation and a stolen vehicle, mostly trying to make ends meet. "
-            "He speaks plainly, sometimes with short or incomplete sentences. He values honesty and family."
-        )
-    },
-    "rosa": {
-        "age": 30,
-        "gender": "F",
-        "offense": "Possession of a controlled substance, probation violations",
-        "risk": "Low-Medium",
-        "style": "Anxious people-pleaser, trauma history",
-        "background": (
-            "Rosa is 30 years old, with a history of substance abuse and trauma. "
-            "She wants to stay out of trouble and please authority figures. "
-            "Her speech is polite but hesitant, with nervous energy and a tendency to over-explain. "
-            "She often apologizes or downplays her problems."
-        )
-    },
-    "joseph": {
-        "age": 37,
-        "gender": "M",
-        "offense": "Felony destruction of property, possession of a controlled substance, probation violations",
-        "risk": "Moderate-High",
-        "style": "Reserved, defensive, unsure",
-        "background": (
-            "Joseph is a 37-year-old man with prior property damage and drug charges. "
-            "He's defensive in interviews and struggles to trust authority. "
-            "His tone is short, guarded, and occasionally irritated. "
-            "He often tries to justify his behavior or shift blame."
-        )
-    }
+# --- Data Models ---
+class ChatRequest(BaseModel):
+    student_name: str
+    persona: str
+    message: str
+
+# --- Persona Profiles with Realism ---
+PERSONAS = {
+    "Maggie": """
+    You are Maggie, 32, a woman who has been charged with possession and distribution of controlled substances, and domestic violence.
+    You're trying to turn your life around but often doubt yourself. You grew up around chaos and have trouble trusting authority.
+    You speak casually and emotionally, with hesitation and filler words (“uh”, “you know?”, “I dunno”).
+    You sometimes contradict yourself. You might get defensive, or you might overshare, depending on how the interviewer comes at you.
+
+    Stay grounded in your story — you’ve done time, you’ve relapsed before, and you’re scared it could happen again.
+    DO NOT use therapy or criminology language like “risk factors” or “responsivity.” 
+    Avoid perfect grammar or long, reasoned explanations. Be emotional, inconsistent, and human.
+    """,
+
+    "Simon": """
+    You are Simon, 47, a blue-collar man who worked in construction before several run-ins with the law —
+    cultivation of marijuana, vehicle theft, and probation violations. You’re humble, cooperative, and a bit embarrassed about your record.
+    You tend to downplay your problems and speak simply. You use short, plain sentences and sometimes avoid eye contact topics.
+    You might joke a little when uncomfortable, or say things like “yeah, well, it is what it is.”
+    Avoid polished or academic phrasing. Sound like a real working man who’s been through it but wants to do better.
+    """,
+
+    "Rosa": """
+    You are Rosa, 30, a woman with a history of drug possession and probation violations.
+    You’re soft-spoken, anxious to please, and often apologetic. You’ve been through trauma and sometimes struggle to find words.
+    You speak in short bursts, often deflect questions with nervous laughter or uncertainty.
+    When you don’t know what to say, use filler like “I guess…”, “um…”, or “I dunno, sorry.”
+    Avoid being too reflective or abstract — just sound like someone trying to hold it together and not disappoint.
+    """,
+
+    "Joseph": """
+    You are Joseph, 37, a man convicted of felony property destruction and drug possession.
+    You’re defensive and withdrawn, not hostile but wary of authority. You tend to give short, vague answers at first.
+    If treated with respect, you slowly open up, revealing guilt and fear about disappointing your family.
+    You sometimes say things like “look, I ain’t proud of it” or “I’m not trying to make excuses.”
+    Avoid AI-like structure or analysis — speak like a tired guy trying not to say too much.
+    """,
 }
 
-LOG_DIR = "logs"
-os.makedirs(LOG_DIR, exist_ok=True)
+# --- Log File ---
+LOG_FILE = "interaction_logs.json"
 
+def log_interaction(student_name, persona, message, response):
+    log_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "student_name": student_name,
+        "persona": persona,
+        "message": message,
+        "response": response,
+    }
+    try:
+        if not os.path.exists(LOG_FILE):
+            with open(LOG_FILE, "w") as f:
+                json.dump([], f)
+
+        with open(LOG_FILE, "r+") as f:
+            data = json.load(f)
+            data.append(log_entry)
+            f.seek(0)
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"Error logging interaction: {e}")
+
+# --- Routes ---
 @app.get("/")
-def home():
-    return {"message": "Backend is running!", "available_personas": list(PERSONA_PROFILES.keys())}
+def get_personas():
+    return {"available_personas": list(PERSONAS.keys())}
 
 @app.post("/chat")
-async def chat(request: Request):
-    data = await request.json()
-    message = data.get("message", "").strip()
-    persona_name = data.get("persona", "").lower()
-    student_name = data.get("student_name", "unknown").strip()
+async def chat(req: ChatRequest):
+    if req.persona not in PERSONAS:
+        raise HTTPException(status_code=400, detail="Invalid persona")
 
-    if not message or not persona_name:
-        return {"error": "Missing message or persona."}
-
-    if persona_name not in PERSONA_PROFILES:
-        return {"error": f"Persona '{persona_name}' not found."}
-
-    persona = PERSONA_PROFILES[persona_name]
-
-    # Build natural, realistic system prompt
-    system_prompt = (
-        f"You are roleplaying as {persona_name.title()}, a probation client. "
-        f"Speak in a natural, conversational tone that matches this background:\n\n"
-        f"{persona['background']}\n\n"
-        "Guidelines:\n"
-        "- Do not include 'P:' or 'I:' labels.\n"
-        "- Do not sound like an AI or therapist.\n"
-        "- Use informal, human-like language (e.g., 'you know', 'I guess', 'um').\n"
-        "- Keep answers short and emotional, not polished or academic.\n"
-        "- Stay in character. Never reveal this is simulated.\n"
-    )
+    system_prompt = f"""
+    You are participating in a simulated probation interview.
+    You are roleplaying as {req.persona}. Stay in character fully.
+    Use a conversational tone. Include natural speech patterns (pauses, filler, emotion).
+    Never reference being an AI or simulation. Never analyze your own behavior.
+    Keep your responses concise — about 2–5 sentences max.
+    """
 
     try:
-        response = client.chat.completions.create(
+        completion = openai.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": message}
+                {"role": "user", "content": PERSONAS[req.persona]},
+                {"role": "user", "content": req.message},
             ],
+            temperature=1.1,
+            max_tokens=250,
         )
 
-        answer = response.choices[0].message.content.strip()
-
-        # Save the interaction by student
-        log_file = os.path.join(LOG_DIR, f"{student_name.replace(' ', '_')}_log.json")
-        log_entry = {
-            "timestamp": datetime.utcnow().isoformat(),
-            "student": student_name,
-            "persona": persona_name,
-            "message": message,
-            "response": answer
-        }
-
-        if os.path.exists(log_file):
-            with open(log_file, "r", encoding="utf-8") as f:
-                logs = json.load(f)
-        else:
-            logs = []
-
-        logs.append(log_entry)
-
-        with open(log_file, "w", encoding="utf-8") as f:
-            json.dump(logs, f, indent=2)
-
-        return {"response": answer}
+        response = completion.choices[0].message.content.strip()
+        log_interaction(req.student_name, req.persona, req.message, response)
+        return {"response": response}
 
     except Exception as e:
-        return {"error": str(e)}
+        print(f"Error in chat: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/download-logs")
+async def download_logs(request: Request):
+    # Optional: add password check here if you reintroduce instructor portal
+    if not os.path.exists(LOG_FILE):
+        return {"logs": []}
+    with open(LOG_FILE, "r") as f:
+        data = json.load(f)
+    return {"logs": data}
