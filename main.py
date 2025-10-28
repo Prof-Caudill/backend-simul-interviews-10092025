@@ -1,17 +1,16 @@
-# main.py — Updated and CORS-fixed
-
+# main.py
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
-import openai
 import os
 import json
 from datetime import datetime
+import openai
 
 app = FastAPI()
 
-# === CORS ===
+# === CORS configuration ===
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://frontend-simul-interviews.onrender.com")
 app.add_middleware(
     CORSMiddleware,
@@ -21,12 +20,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# === OpenAI config ===
+# === OpenAI API Key ===
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# === Logging config ===
+# === Logging ===
 LOG_FILE = "interaction_logs.json"
 LOG_DOWNLOAD_PASSWORD = os.getenv("LOG_DOWNLOAD_PASSWORD", "defaultpassword")
+
+def ensure_log_file():
+    if not os.path.exists(LOG_FILE):
+        with open(LOG_FILE, "w", encoding="utf-8") as f:
+            json.dump([], f)
+
+def append_log(entry: dict):
+    ensure_log_file()
+    with open(LOG_FILE, "r", encoding="utf-8") as f:
+        try:
+            data = json.load(f)
+        except json.JSONDecodeError:
+            data = []
+    data.append(entry)
+    with open(LOG_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
 
 # === Personas ===
 personas = {
@@ -42,8 +57,8 @@ personas = {
         "style": "Anxious, cooperative, easily discouraged",
         "prompt": (
             "You are Maggie, 32, on probation for drug-related and domestic violence charges. "
-            "Speak informally with hesitations ('um', 'you know'), occasional repetition, short emotional responses. "
-            "Avoid academic or therapeutic language. Do not reveal you are AI."
+            "Speak informally with hesitations ('um', 'you know'), short emotional responses. "
+            "Do not reveal you are AI."
         )
     },
     "Simon": {
@@ -56,10 +71,10 @@ personas = {
             "Probation violations"
         ],
         "risk_level": "Moderate",
-        "style": "Humble, cooperative, blue collar worker, simple",
+        "style": "Humble, cooperative, blue collar worker",
         "prompt": (
-            "You are Simon, 47, a blue-collar man with the legal history above. "
-            "Speak plainly, short sentences, occasional self-deprecation, no polished analysis."
+            "You are Simon, 47, a blue-collar man with legal history as above. "
+            "Speak plainly, short sentences, occasional self-deprecation."
         )
     },
     "Rosa": {
@@ -72,7 +87,8 @@ personas = {
         "risk_level": "Low-medium",
         "style": "Anxious people pleaser, trauma history",
         "prompt": (
-            "You are Rosa, 30, with trauma history. Speak softly, hesitantly, often apologetic, avoid complex analysis."
+            "You are Rosa, 30, with trauma history. Speak softly, hesitantly, often apologetic, "
+            "avoid complex analysis."
         )
     },
     "Joseph": {
@@ -91,35 +107,16 @@ personas = {
     }
 }
 
-# === Helpers ===
-
-def ensure_log_file():
-    if not os.path.exists(LOG_FILE):
-        with open(LOG_FILE, "w", encoding="utf-8") as f:
-            json.dump([], f)
-
-def append_log(entry: dict):
-    ensure_log_file()
-    with open(LOG_FILE, "r", encoding="utf-8") as f:
-        try:
-            data = json.load(f)
-        except json.JSONDecodeError:
-            data = []
-    data.append(entry)
-    with open(LOG_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-
-# === Pydantic model for interact endpoint ===
+# === Pydantic model for interaction ===
 class Interaction(BaseModel):
     student_name: str
     persona_name: str
     user_input: str
 
-# === ROUTES ===
-
+# === Routes ===
 @app.get("/")
 async def root():
-    """Return status and persona list (frontend expects available_personas here)."""
+    """Return backend status and available personas for frontend dropdown."""
     return {"message": "Backend running", "available_personas": list(personas.keys())}
 
 @app.get("/personas")
@@ -140,13 +137,13 @@ async def get_personas():
 @app.post("/interact")
 async def interact(payload: Interaction):
     """Generate persona response and log interaction per student."""
-    persona_name = payload.persona_name
-    if persona_name not in personas:
+    if payload.persona_name not in personas:
         raise HTTPException(status_code=404, detail="Persona not found")
-
-    persona_prompt = personas[persona_name]["prompt"]
+    
+    persona_prompt = personas[payload.persona_name]["prompt"]
     user_message = payload.user_input
 
+    # OpenAI chat request
     messages = [
         {"role": "system", "content": persona_prompt},
         {"role": "user", "content": user_message}
@@ -167,7 +164,7 @@ async def interact(payload: Interaction):
     entry = {
         "timestamp": datetime.utcnow().isoformat(),
         "student_name": payload.student_name,
-        "persona_name": persona_name,
+        "persona_name": payload.persona_name,
         "user_input": user_message,
         "persona_response": persona_response
     }
@@ -177,10 +174,10 @@ async def interact(payload: Interaction):
 
 @app.get("/download_logs")
 async def download_logs(password: str):
-    """Secure download of logs grouped by student."""
-    if password != os.getenv("LOG_DOWNLOAD_PASSWORD", "defaultpassword"):
+    """Securely download logs grouped by student."""
+    if password != LOG_DOWNLOAD_PASSWORD:
         raise HTTPException(status_code=401, detail="Unauthorized: Invalid password")
-
+    
     if not os.path.exists(LOG_FILE):
         raise HTTPException(status_code=404, detail="No logs found")
 
