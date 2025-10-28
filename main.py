@@ -11,19 +11,20 @@ from datetime import datetime
 app = FastAPI()
 
 # === CORS ===
-FRONTEND_URL = os.getenv("FRONTEND_URL", "https://frontend-simul-interviews-10092025.onrender.com")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "https://frontend-simul-interviews.onrender.com/")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         FRONTEND_URL,
         "http://localhost:3000",
-        "http://localhost:5173",
-        "https://backend-simul-interviews-10092025.onrender.com"
+        "http://localhost:5173"
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # === OpenAI config ===
 openai.api_key = os.getenv("OPENAI_API_KEY")
