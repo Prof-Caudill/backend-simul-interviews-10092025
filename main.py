@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 import openai
 import os
@@ -13,22 +13,20 @@ from datetime import datetime
 
 app = FastAPI()
 
-# Allow frontend access (adjust this if your frontend URL changes)
+# Allow frontend access (adjust these if URLs change)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://frontend-simul-interviews-10092025.onrender.com",  # <-- your frontend
-        "http://localhost:5173",  # local testing
+        "https://frontend-simul-interviews-10092025.onrender.com",
+        "http://localhost:5173",  # local dev
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# OpenAI setup
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# Log file and password
 LOG_FILE = "interaction_logs.json"
 LOG_DOWNLOAD_PASSWORD = os.getenv("LOG_DOWNLOAD_PASSWORD", "defaultpassword")
 
@@ -114,7 +112,7 @@ personas = {
 
 
 # =========================================================
-# LOGGING FUNCTION
+# LOGGING
 # =========================================================
 
 def log_interaction(student_name, persona_name, user_input, persona_response):
@@ -126,13 +124,13 @@ def log_interaction(student_name, persona_name, user_input, persona_response):
         "persona_response": persona_response,
     }
 
-    if os.path.exists(LOG_FILE):
-        with open(LOG_FILE, "r", encoding="utf-8") as f:
-            try:
+    try:
+        if os.path.exists(LOG_FILE):
+            with open(LOG_FILE, "r", encoding="utf-8") as f:
                 logs = json.load(f)
-            except json.JSONDecodeError:
-                logs = []
-    else:
+        else:
+            logs = []
+    except json.JSONDecodeError:
         logs = []
 
     logs.append(log_entry)
@@ -142,8 +140,32 @@ def log_interaction(student_name, persona_name, user_input, persona_response):
 
 
 # =========================================================
-# API ROUTES
+# ROUTES
 # =========================================================
+
+@app.get("/")
+async def root():
+    return {"message": "Simulated Interview Backend Active"}
+
+
+@app.get("/personas")
+async def get_personas():
+    """
+    Returns a list of persona names and their attributes
+    for the dropdown menu in the frontend.
+    """
+    persona_list = []
+    for name, details in personas.items():
+        persona_list.append({
+            "name": name,
+            "age": details["age"],
+            "gender": details["gender"],
+            "offenses": details["offenses"],
+            "risk_level": details["risk_level"],
+            "style": details["style"],
+        })
+    return JSONResponse(content=persona_list)
+
 
 @app.post("/interact")
 async def interact(interaction: Interaction):
@@ -154,7 +176,6 @@ async def interact(interaction: Interaction):
     system_prompt = persona["prompt"]
     user_message = interaction.user_input
 
-    # Generate a persona-specific response
     try:
         response = openai.ChatCompletion.create(
             model="gpt-4o-mini",
@@ -168,21 +189,17 @@ async def interact(interaction: Interaction):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    # Log the exchange
+    # Log interaction
     log_interaction(interaction.student_name, interaction.persona_name, user_message, persona_response)
 
     return {"response": persona_response}
 
 
-# =========================================================
-# LOG DOWNLOAD (GROUPED BY STUDENT)
-# =========================================================
-
 @app.get("/download_logs")
 async def download_logs(password: str):
     """
-    Secure endpoint to download interaction logs, grouped by student name.
-    Access: /download_logs?password=yourpassword
+    Secure endpoint to download interaction logs grouped by student name.
+    Example: /download_logs?password=yourpassword
     """
     if password != LOG_DOWNLOAD_PASSWORD:
         raise HTTPException(status_code=401, detail="Unauthorized: Invalid password")
@@ -193,7 +210,6 @@ async def download_logs(password: str):
     with open(LOG_FILE, "r", encoding="utf-8") as f:
         logs = json.load(f)
 
-    # Group logs by student name
     grouped_logs = {}
     for entry in logs:
         student = entry.get("student_name", "unknown_student")
@@ -208,12 +224,3 @@ async def download_logs(password: str):
         media_type="application/json",
         filename="grouped_interaction_logs.json"
     )
-
-
-# =========================================================
-# ROOT ENDPOINT
-# =========================================================
-
-@app.get("/")
-async def root():
-    return {"message": "Simulated Interview Backend Active"}
