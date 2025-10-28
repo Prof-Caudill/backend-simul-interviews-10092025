@@ -1,4 +1,5 @@
-# main.py — verified stable version
+# main.py — Updated and CORS-fixed
+
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -11,7 +12,7 @@ from datetime import datetime
 app = FastAPI()
 
 # === CORS ===
-FRONTEND_URL = os.getenv("FRONTEND_URL", "https://frontend-simul-interviews.onrender.com/")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "https://frontend-simul-interviews.onrender.com")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[FRONTEND_URL, "http://localhost:3000", "http://localhost:5173"],
@@ -19,9 +20,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-
 
 # === OpenAI config ===
 openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -44,8 +42,8 @@ personas = {
         "style": "Anxious, cooperative, easily discouraged",
         "prompt": (
             "You are Maggie, 32, on probation for drug-related and domestic violence charges. "
-            "Speak in an informal, human way with hesitations ('um', 'you know'), occasional repetition, "
-            "and short, emotional responses. Avoid academic or therapeutic language. Do not reveal you are AI."
+            "Speak informally with hesitations ('um', 'you know'), occasional repetition, short emotional responses. "
+            "Avoid academic or therapeutic language. Do not reveal you are AI."
         )
     },
     "Simon": {
@@ -60,8 +58,8 @@ personas = {
         "risk_level": "Moderate",
         "style": "Humble, cooperative, blue collar worker, simple",
         "prompt": (
-            "You are Simon, 47, a blue-collar man with legal history described above. "
-            "Speak plainly and humbly, short sentences, occasional self-deprecation, no polished analysis."
+            "You are Simon, 47, a blue-collar man with the legal history above. "
+            "Speak plainly, short sentences, occasional self-deprecation, no polished analysis."
         )
     },
     "Rosa": {
@@ -111,7 +109,7 @@ def append_log(entry: dict):
     with open(LOG_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
-# === Pydantic model ===
+# === Pydantic model for interact endpoint ===
 class Interaction(BaseModel):
     student_name: str
     persona_name: str
@@ -122,14 +120,11 @@ class Interaction(BaseModel):
 @app.get("/")
 async def root():
     """Return status and persona list (frontend expects available_personas here)."""
-    return {
-        "message": "Backend running successfully.",
-        "available_personas": list(personas.keys())
-    }
+    return {"message": "Backend running", "available_personas": list(personas.keys())}
 
 @app.get("/personas")
 async def get_personas():
-    """Return detailed persona metadata if needed."""
+    """Return detailed persona metadata."""
     persona_list = []
     for name, details in personas.items():
         persona_list.append({
@@ -144,7 +139,7 @@ async def get_personas():
 
 @app.post("/interact")
 async def interact(payload: Interaction):
-    """Generate persona response and log the interaction per student."""
+    """Generate persona response and log interaction per student."""
     persona_name = payload.persona_name
     if persona_name not in personas:
         raise HTTPException(status_code=404, detail="Persona not found")
@@ -168,6 +163,7 @@ async def interact(payload: Interaction):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+    # Log interaction
     entry = {
         "timestamp": datetime.utcnow().isoformat(),
         "student_name": payload.student_name,
@@ -181,8 +177,8 @@ async def interact(payload: Interaction):
 
 @app.get("/download_logs")
 async def download_logs(password: str):
-    """Securely download grouped logs by student."""
-    if password != LOG_DOWNLOAD_PASSWORD:
+    """Secure download of logs grouped by student."""
+    if password != os.getenv("LOG_DOWNLOAD_PASSWORD", "defaultpassword"):
         raise HTTPException(status_code=401, detail="Unauthorized: Invalid password")
 
     if not os.path.exists(LOG_FILE):
