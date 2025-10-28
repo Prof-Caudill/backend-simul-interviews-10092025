@@ -1,137 +1,219 @@
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import openai
 import os
 import json
 from datetime import datetime
 
+# =========================================================
+# CONFIGURATION
+# =========================================================
+
 app = FastAPI()
 
-# --- CORS Configuration ---
+# Allow frontend access (adjust this if your frontend URL changes)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust for production security later
+    allow_origins=[
+        "https://frontend-simul-interviews-10092025.onrender.com",  # <-- your frontend
+        "http://localhost:5173",  # local testing
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- OpenAI Configuration ---
+# OpenAI setup
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# --- Data Models ---
-class ChatRequest(BaseModel):
+# Log file and password
+LOG_FILE = "interaction_logs.json"
+LOG_DOWNLOAD_PASSWORD = os.getenv("LOG_DOWNLOAD_PASSWORD", "defaultpassword")
+
+# =========================================================
+# DATA MODELS
+# =========================================================
+
+class Interaction(BaseModel):
     student_name: str
-    persona: str
-    message: str
+    persona_name: str
+    user_input: str
 
-# --- Persona Profiles with Realism ---
-PERSONAS = {
-    "Maggie": """
-    You are Maggie, 32, a woman who has been charged with possession and distribution of controlled substances, and domestic violence.
-    You're trying to turn your life around but often doubt yourself. You grew up around chaos and have trouble trusting authority.
-    You speak casually and emotionally, with hesitation and filler words (“uh”, “you know?”, “I dunno”).
-    You sometimes contradict yourself. You might get defensive, or you might overshare, depending on how the interviewer comes at you.
 
-    Stay grounded in your story — you’ve done time, you’ve relapsed before, and you’re scared it could happen again.
-    DO NOT use therapy or criminology language like “risk factors” or “responsivity.” 
-    Avoid perfect grammar or long, reasoned explanations. Be emotional, inconsistent, and human.
-    """,
+# =========================================================
+# PERSONA DATA
+# =========================================================
 
-    "Simon": """
-    You are Simon, 47, a blue-collar man who worked in construction before several run-ins with the law —
-    cultivation of marijuana, vehicle theft, and probation violations. You’re humble, cooperative, and a bit embarrassed about your record.
-    You tend to downplay your problems and speak simply. You use short, plain sentences and sometimes avoid eye contact topics.
-    You might joke a little when uncomfortable, or say things like “yeah, well, it is what it is.”
-    Avoid polished or academic phrasing. Sound like a real working man who’s been through it but wants to do better.
-    """,
-
-    "Rosa": """
-    You are Rosa, 30, a woman with a history of drug possession and probation violations.
-    You’re soft-spoken, anxious to please, and often apologetic. You’ve been through trauma and sometimes struggle to find words.
-    You speak in short bursts, often deflect questions with nervous laughter or uncertainty.
-    When you don’t know what to say, use filler like “I guess…”, “um…”, or “I dunno, sorry.”
-    Avoid being too reflective or abstract — just sound like someone trying to hold it together and not disappoint.
-    """,
-
-    "Joseph": """
-    You are Joseph, 37, a man convicted of felony property destruction and drug possession.
-    You’re defensive and withdrawn, not hostile but wary of authority. You tend to give short, vague answers at first.
-    If treated with respect, you slowly open up, revealing guilt and fear about disappointing your family.
-    You sometimes say things like “look, I ain’t proud of it” or “I’m not trying to make excuses.”
-    Avoid AI-like structure or analysis — speak like a tired guy trying not to say too much.
-    """,
+personas = {
+    "Maggie": {
+        "age": 32,
+        "gender": "F",
+        "offenses": [
+            "Possession of a controlled substance",
+            "Distribution of a controlled substance",
+            "Domestic violence"
+        ],
+        "risk_level": "Moderate-high",
+        "style": "Anxious, cooperative, easily discouraged",
+        "prompt": (
+            "You are Maggie, a 32-year-old woman on probation for drug-related and domestic violence charges. "
+            "You’re anxious but want to do better. You try to be polite, open, and cooperative, but sometimes your anxiety or guilt shows. "
+            "Speak naturally and realistically like someone with lived correctional experience, not like an AI."
+        )
+    },
+    "Simon": {
+        "age": 47,
+        "gender": "M",
+        "offenses": [
+            "Cultivation of marijuana",
+            "Vehicle theft",
+            "Child support issues",
+            "Probation violations"
+        ],
+        "risk_level": "Moderate",
+        "style": "Humble, cooperative, blue collar worker, simple",
+        "prompt": (
+            "You are Simon, a 47-year-old man on probation. You’re a humble, blue-collar guy trying to get back on your feet. "
+            "You’ve made mistakes but you’re cooperative and realistic. Speak in a grounded, genuine way, with simple phrasing."
+        )
+    },
+    "Rosa": {
+        "age": 30,
+        "gender": "F",
+        "offenses": [
+            "Possession of a controlled substance",
+            "Probation violations"
+        ],
+        "risk_level": "Low-medium",
+        "style": "Anxious people pleaser, trauma history",
+        "prompt": (
+            "You are Rosa, a 30-year-old woman on probation for possession and probation violations. "
+            "You’re anxious and tend to people-please. You have a trauma history but want to do well. "
+            "Be realistic, occasionally hesitant, but earnest. Avoid sounding robotic or overly formal."
+        )
+    },
+    "Joseph": {
+        "age": 37,
+        "gender": "M",
+        "offenses": [
+            "Felony destruction of property",
+            "Possession of a controlled substance",
+            "Probation violations"
+        ],
+        "risk_level": "Moderate-high",
+        "style": "Reserved, defensive and unsure",
+        "prompt": (
+            "You are Joseph, a 37-year-old man on probation. You’ve struggled with substance use and anger management. "
+            "You tend to be quiet, guarded, and defensive until you feel safe. Respond in a way that feels human and conflicted, "
+            "sometimes short or uncertain, but genuine."
+        )
+    }
 }
 
-# --- Log File ---
-LOG_FILE = "interaction_logs.json"
 
-def log_interaction(student_name, persona, message, response):
+# =========================================================
+# LOGGING FUNCTION
+# =========================================================
+
+def log_interaction(student_name, persona_name, user_input, persona_response):
     log_entry = {
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.utcnow().isoformat(),
         "student_name": student_name,
-        "persona": persona,
-        "message": message,
-        "response": response,
+        "persona_name": persona_name,
+        "user_input": user_input,
+        "persona_response": persona_response,
     }
+
+    if os.path.exists(LOG_FILE):
+        with open(LOG_FILE, "r", encoding="utf-8") as f:
+            try:
+                logs = json.load(f)
+            except json.JSONDecodeError:
+                logs = []
+    else:
+        logs = []
+
+    logs.append(log_entry)
+
+    with open(LOG_FILE, "w", encoding="utf-8") as f:
+        json.dump(logs, f, indent=2)
+
+
+# =========================================================
+# API ROUTES
+# =========================================================
+
+@app.post("/interact")
+async def interact(interaction: Interaction):
+    persona = personas.get(interaction.persona_name)
+    if not persona:
+        raise HTTPException(status_code=404, detail="Persona not found")
+
+    system_prompt = persona["prompt"]
+    user_message = interaction.user_input
+
+    # Generate a persona-specific response
     try:
-        if not os.path.exists(LOG_FILE):
-            with open(LOG_FILE, "w") as f:
-                json.dump([], f)
-
-        with open(LOG_FILE, "r+") as f:
-            data = json.load(f)
-            data.append(log_entry)
-            f.seek(0)
-            json.dump(data, f, indent=2)
-    except Exception as e:
-        print(f"Error logging interaction: {e}")
-
-# --- Routes ---
-@app.get("/")
-def get_personas():
-    return {"available_personas": list(PERSONAS.keys())}
-
-@app.post("/chat")
-async def chat(req: ChatRequest):
-    if req.persona not in PERSONAS:
-        raise HTTPException(status_code=400, detail="Invalid persona")
-
-    system_prompt = f"""
-    You are participating in a simulated probation interview.
-    You are roleplaying as {req.persona}. Stay in character fully.
-    Use a conversational tone. Include natural speech patterns (pauses, filler, emotion).
-    Never reference being an AI or simulation. Never analyze your own behavior.
-    Keep your responses concise — about 2–5 sentences max.
-    """
-
-    try:
-        completion = openai.chat.completions.create(
+        response = openai.ChatCompletion.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": PERSONAS[req.persona]},
-                {"role": "user", "content": req.message},
+                {"role": "user", "content": user_message}
             ],
-            temperature=1.1,
-            max_tokens=250,
+            temperature=0.8
         )
-
-        response = completion.choices[0].message.content.strip()
-        log_interaction(req.student_name, req.persona, req.message, response)
-        return {"response": response}
-
+        persona_response = response.choices[0].message["content"].strip()
     except Exception as e:
-        print(f"Error in chat: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+    # Log the exchange
+    log_interaction(interaction.student_name, interaction.persona_name, user_message, persona_response)
 
-@app.get("/download-logs")
-async def download_logs(request: Request):
-    # Optional: add password check here if you reintroduce instructor portal
+    return {"response": persona_response}
+
+
+# =========================================================
+# LOG DOWNLOAD (GROUPED BY STUDENT)
+# =========================================================
+
+@app.get("/download_logs")
+async def download_logs(password: str):
+    """
+    Secure endpoint to download interaction logs, grouped by student name.
+    Access: /download_logs?password=yourpassword
+    """
+    if password != LOG_DOWNLOAD_PASSWORD:
+        raise HTTPException(status_code=401, detail="Unauthorized: Invalid password")
+
     if not os.path.exists(LOG_FILE):
-        return {"logs": []}
-    with open(LOG_FILE, "r") as f:
-        data = json.load(f)
-    return {"logs": data}
+        raise HTTPException(status_code=404, detail="No logs found")
+
+    with open(LOG_FILE, "r", encoding="utf-8") as f:
+        logs = json.load(f)
+
+    # Group logs by student name
+    grouped_logs = {}
+    for entry in logs:
+        student = entry.get("student_name", "unknown_student")
+        grouped_logs.setdefault(student, []).append(entry)
+
+    grouped_file = "grouped_interaction_logs.json"
+    with open(grouped_file, "w", encoding="utf-8") as f:
+        json.dump(grouped_logs, f, indent=2)
+
+    return FileResponse(
+        grouped_file,
+        media_type="application/json",
+        filename="grouped_interaction_logs.json"
+    )
+
+
+# =========================================================
+# ROOT ENDPOINT
+# =========================================================
+
+@app.get("/")
+async def root():
+    return {"message": "Simulated Interview Backend Active"}
