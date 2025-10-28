@@ -1,4 +1,4 @@
-# main.py — corrected
+# main.py — verified stable version
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -14,7 +14,12 @@ app = FastAPI()
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://frontend-simul-interviews-10092025.onrender.com")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_URL, "http://localhost:3000", "http://localhost:5173"],  # add your local dev origin if needed
+    allow_origins=[
+        FRONTEND_URL,
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "https://backend-simul-interviews-10092025.onrender.com"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -27,7 +32,7 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 LOG_FILE = "interaction_logs.json"
 LOG_DOWNLOAD_PASSWORD = os.getenv("LOG_DOWNLOAD_PASSWORD", "defaultpassword")
 
-# === Personas (profiles + prompt fragments) ===
+# === Personas ===
 personas = {
     "Maggie": {
         "age": 32,
@@ -108,7 +113,7 @@ def append_log(entry: dict):
     with open(LOG_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
-# === Pydantic model for interact endpoint ===
+# === Pydantic model ===
 class Interaction(BaseModel):
     student_name: str
     persona_name: str
@@ -119,11 +124,14 @@ class Interaction(BaseModel):
 @app.get("/")
 async def root():
     """Return status and persona list (frontend expects available_personas here)."""
-    return {"message": "Backend running", "available_personas": list(personas.keys())}
+    return {
+        "message": "Backend running successfully.",
+        "available_personas": list(personas.keys())
+    }
 
 @app.get("/personas")
 async def get_personas():
-    """Return detailed persona metadata if the frontend or admin tools need it."""
+    """Return detailed persona metadata if needed."""
     persona_list = []
     for name, details in personas.items():
         persona_list.append({
@@ -146,7 +154,6 @@ async def interact(payload: Interaction):
     persona_prompt = personas[persona_name]["prompt"]
     user_message = payload.user_input
 
-    # Build system + user messages (keeps persona-guidance + user input)
     messages = [
         {"role": "system", "content": persona_prompt},
         {"role": "user", "content": user_message}
@@ -163,7 +170,6 @@ async def interact(payload: Interaction):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    # Log
     entry = {
         "timestamp": datetime.utcnow().isoformat(),
         "student_name": payload.student_name,
@@ -177,10 +183,7 @@ async def interact(payload: Interaction):
 
 @app.get("/download_logs")
 async def download_logs(password: str):
-    """
-    Securely download grouped logs by student.
-    Usage: /download_logs?password=yourpassword
-    """
+    """Securely download grouped logs by student."""
     if password != LOG_DOWNLOAD_PASSWORD:
         raise HTTPException(status_code=401, detail="Unauthorized: Invalid password")
 
