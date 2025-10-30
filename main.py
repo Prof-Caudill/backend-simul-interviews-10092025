@@ -1,31 +1,28 @@
-# main.py
 import os
 import json
 import re
 import logging
 from datetime import datetime
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
-import openai
+from openai import OpenAI
 
 # ---------------------------
-# Logging
+# Logging Setup
 # ---------------------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("sim-interviews-backend")
 
 # ---------------------------
-# App & CORS configuration
+# FastAPI App + CORS
 # ---------------------------
 app = FastAPI(title="Simulated Interview Backend")
 
-# FRONTEND_URL: set this in Render to your exact frontend origin (no trailing slash)
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://frontend-simul-interviews.onrender.com")
 
-# Allow the deployed frontend and local dev domains
-ALLOWED_ORIGINS = [
+ALLOW_ORIGINS = [
     FRONTEND_URL,
     "https://frontend-simul-interviews-10092025.onrender.com",
     "http://localhost:3000",
@@ -34,26 +31,24 @@ ALLOWED_ORIGINS = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOW_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"],  # ensures CORS headers visible to browser
 )
 
 # ---------------------------
 # OpenAI Setup
 # ---------------------------
-openai.api_key = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # ---------------------------
-# Logging files / directories
+# Logging Directory
 # ---------------------------
 LOG_DIR = "logs"
 os.makedirs(LOG_DIR, exist_ok=True)
 LOG_FILE = os.path.join(LOG_DIR, "interaction_logs.json")
 
-# ensure file exists
 if not os.path.exists(LOG_FILE):
     with open(LOG_FILE, "w", encoding="utf-8") as f:
         json.dump([], f)
@@ -61,7 +56,7 @@ if not os.path.exists(LOG_FILE):
 LOG_DOWNLOAD_PASSWORD = os.getenv("LOG_DOWNLOAD_PASSWORD", "defaultpassword")
 
 # ---------------------------
-# Persona definitions
+# Persona Definitions
 # ---------------------------
 PERSONAS = {
     "Maggie": {
@@ -112,10 +107,9 @@ PERSONAS = {
 }
 
 # ---------------------------
-# Helper functions
+# Helpers
 # ---------------------------
 def build_system_prompt(persona_name: str) -> str:
-    """Return a system prompt instructing the model to stay in-character and be realistic."""
     p = PERSONAS.get(persona_name)
     if not p:
         return ""
@@ -126,22 +120,21 @@ def build_system_prompt(persona_name: str) -> str:
         "- Stay fully in character as the named client. Do not reveal you are an AI or that this is a simulation.\n"
         "- Speak naturally and imperfectly: include hesitations, filler words, short sentences, occasional repetition.\n"
         "- Do NOT use academic, clinical, or criminological jargon.\n"
-        "- Do NOT include labels like 'P:' or 'I:' or transcript formatting.\n"
-        "- Keep replies concise (2–6 sentences) unless the interviewer probes deeply.\n"
-        "- If unsure or uncomfortable, respond with brief, human hesitation or deflection.\n"
+        "- Do NOT include the speaker labels 'P:' or 'I:' or any transcript-like markers.\n"
+        "- Keep replies concise (2–6 sentences) unless the user asks follow-ups.\n"
+        "- If unsure or uncomfortable, respond briefly and humanly, not analytically.\n"
     )
 
 def clean_response_text(text: str) -> str:
-    """Remove transcript labels and extra whitespace."""
     if not isinstance(text, str):
         return ""
     text = re.sub(r'(^|\n)\s*[PI]\s*:\s*', r'\1', text)
     text = re.sub(r'\[?\b[PpIi]\b\]?\s*:\s*', '', text)
     text = re.sub(r'\n\s*\n+', '\n\n', text).strip()
+    text = re.sub(r'(P:|I:)\s*$', '', text).strip()
     return text
 
 def append_log(entry: dict):
-    """Append an interaction entry to the JSON log file."""
     try:
         with open(LOG_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -152,7 +145,7 @@ def append_log(entry: dict):
         json.dump(data, f, indent=2)
 
 # ---------------------------
-# Request/response models
+# Pydantic Models
 # ---------------------------
 class ChatPayload(BaseModel):
     message: str
@@ -164,27 +157,25 @@ class ChatPayload(BaseModel):
 # ---------------------------
 @app.get("/")
 async def root():
-    """Return status and persona list for frontend dropdown."""
     return {"message": "Backend running", "available_personas": list(PERSONAS.keys())}
 
 @app.get("/personas")
 async def list_personas():
-    """Return persona metadata if needed."""
-    out = []
-    for name, d in PERSONAS.items():
-        out.append({
+    out = [
+        {
             "name": name,
-            "age": d.get("age"),
-            "gender": d.get("gender"),
-            "offense": d.get("offense"),
-            "risk": d.get("risk"),
-            "style": d.get("style"),
-        })
+            "age": d["age"],
+            "gender": d["gender"],
+            "offense": d["offense"],
+            "risk": d["risk"],
+            "style": d["style"],
+        }
+        for name, d in PERSONAS.items()
+    ]
     return JSONResponse(content=out)
 
 @app.post("/chat")
 async def chat(payload: ChatPayload):
-    """Main chat endpoint used by the frontend."""
     if payload.persona not in PERSONAS:
         raise HTTPException(status_code=404, detail=f"Persona '{payload.persona}' not found.")
 
@@ -197,14 +188,15 @@ async def chat(payload: ChatPayload):
     ]
 
     try:
-        resp = openai.ChatCompletion.create(
+        completion = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages,
             temperature=0.9,
             max_tokens=300,
         )
-        raw_text = resp.choices[0].message.content
-        cleaned = clean_response_text(raw_text)
+
+        raw_text = completion.choices[0].message.content if completion.choices else ""
+        cleaned = clean_response_text(raw_text or "")
 
         entry = {
             "timestamp": datetime.utcnow().isoformat(),
@@ -223,7 +215,6 @@ async def chat(payload: ChatPayload):
 
 @app.get("/download_logs")
 async def download_logs(password: str):
-    """Protected download of grouped logs by student."""
     if password != LOG_DOWNLOAD_PASSWORD:
         raise HTTPException(status_code=401, detail="Unauthorized: Invalid password")
 
